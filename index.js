@@ -77,7 +77,7 @@ app.get('/games', async (req, res) => {
       FROM games 
       JOIN categories 
         ON games."categoryId"=categories.id 
-      WHERE LOWER(categories.name) LIKE $1
+      WHERE LOWER(games.name) LIKE LOWER($1)
     ;`, [name + '%']);
     res.send(games.rows).status(200);
   } catch {
@@ -119,8 +119,15 @@ app.get('/customers', async (req, res) => {
   const cpf = req.query.cpf ? req.query.cpf : "";
 
   try {
-    const customers = await connection.query(`SELECT * FROM customers WHERE cpf LIKE $1;`, [cpf + '%']);
-    res.send(customers.rows).status(200);
+    const customersResult = await connection.query(`SELECT * FROM customers WHERE cpf LIKE $1;`, [cpf + '%']);
+    const customers = customersResult.rows.map(customer => {
+      return {
+        ...customer,
+        birthday: dayjs(customer.birthday).format('YYYY-MM-DD')
+      }
+    })
+
+    res.send(customers).status(200);
   } catch {
     res.sendStatus(500);
   }
@@ -130,12 +137,19 @@ app.get('/customers/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const customers = await connection.query(`SELECT * FROM customers WHERE id = $1;`, [id]);
-    if (customers.rows.length === 0) {
+    const customersResult = await connection.query(`SELECT * FROM customers WHERE id = $1;`, [id]);
+    if (customersResult.rows.length === 0) {
       res.sendStatus(404);
       return;
     }
-    res.send(customers.rows[0]).status(200);
+    const customers = customersResult.rows.map(customer => {
+      return {
+        ...customer,
+        birthday: dayjs(customer.birthday).format('YYYY-MM-DD')
+      }
+    })
+
+    res.send(customers[0]).status(200);
   } catch {
     res.sendStatus(500);
   }
@@ -226,9 +240,9 @@ app.get('/rentals', async (req, res) => {
         id: rental.id,
         customerId: rental.customerId,
         gameId: rental.gameId,
-        rentDate: rental.rentDate,
+        rentDate: dayjs(rental.rentDate).format('YYYY-MM-DD'),
         daysRented: rental.daysRented,
-        returnDate: rental.returnDate,
+        returnDate: rental.returnDate ? dayjs(rental.returnDate).format('YYYY-MM-DD') : rental.returnDate,
         originalPrice: rental.originalPrice,
         delayFee: rental.delayFee,
         customer: {
@@ -269,7 +283,7 @@ app.post('/rentals', async (req, res) => {
     }
 
     const stock = gameCheck.rows[0].stockTotal;
-    const totalRentals = await connection.query(`SELECT * FROM rentals WHERE "gameId" = $1;`, [gameId]);
+    const totalRentals = await connection.query(`SELECT * FROM rentals WHERE "gameId" = $1 AND "returnDate" is null;`, [gameId]);
     if (stock === totalRentals.rows.length) {
       return res.sendStatus(400);
     }
@@ -313,7 +327,7 @@ app.post('/rentals/:id/return', async (req, res) => {
     const daysRented = rentalCheck.rows[0].daysRented;
     const rentDate = rentalCheck.rows[0].rentDate;
     const returnDate = dayjs().format('YYYY-MM-DD');
-    const delayFee = (dayjs(returnDate).diff(rentDate, 'day') - daysRented) * pricePerDay;
+    const delayFee = Math.max((dayjs(returnDate).diff(rentDate, 'day') - daysRented) * pricePerDay, 0);
 
     await connection.query(`UPDATE rentals SET "returnDate" = $2, "delayFee" = $3 WHERE id = $1;`, [id, returnDate, delayFee]);
     res.sendStatus(200);
